@@ -3,8 +3,8 @@ import torch.nn as nn
 
 
 def dwt_init(x):
-    x01 = x[:, :, 0::2, :] / 2
-    x02 = x[:, :, 1::2, :] / 2
+    x01 = x[:, :, 0::2, :] / 2.0
+    x02 = x[:, :, 1::2, :] / 2.0
     x1 = x01[:, :, :, 0::2]
     x2 = x02[:, :, :, 0::2]
     x3 = x01[:, :, :, 1::2]
@@ -18,14 +18,14 @@ def dwt_init(x):
 
 
 # haar wavelet
-def iwt_init(x):
+def idwt_init(x):
     r = 2
     in_batch, in_channel, in_height, in_width = x.size()
     out_batch, out_channel, out_height, out_width = int(in_batch / (r**2)), in_channel, r * in_height, r * in_width
-    x1 = x[0:out_batch, :, :] / 2
-    x2 = x[out_batch : out_batch * 2, :, :, :] / 2
-    x3 = x[out_batch * 2 : out_batch * 3, :, :, :] / 2
-    x4 = x[out_batch * 3 : out_batch * 4, :, :, :] / 2
+    x1 = x[0:out_batch, :, :] / 2.0
+    x2 = x[out_batch : out_batch * 2, :, :, :] / 2.0
+    x3 = x[out_batch * 2 : out_batch * 3, :, :, :] / 2.0
+    x4 = x[out_batch * 3 : out_batch * 4, :, :, :] / 2.0
 
     h = torch.zeros([out_batch, out_channel, out_height, out_width]).float().to(x.device)
 
@@ -46,10 +46,10 @@ class DWT(nn.Module):
         return dwt_init(x)
 
 
-class IWT(nn.Module):
+class IDWT(nn.Module):
     def __init__(self):
-        super(IWT, self).__init__()
+        super(IDWT, self).__init__()
         self.requires_grad = False
 
     def forward(self, x):
-        return iwt_init(x)
+        return idwt_init(x)

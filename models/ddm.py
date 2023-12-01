@@ -118,9 +118,9 @@ class Net(nn.Module):
         self.Unet = DiffusionUNet(config)
 
         betas = get_beta_schedule(
-            beta_schedule=config.diffusion.beta_schedule,
-            beta_start=config.diffusion.beta_start,
-            beta_end=config.diffusion.beta_end,
+            beta_schedule=config.diffusion.beta_schedule, # 'linear'
+            beta_start=config.diffusion.beta_start, # 0.0001
+            beta_end=config.diffusion.beta_end, # 0.02
             num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps,
         )
 
@@ -136,10 +136,14 @@ class Net(nn.Module):
     def sample_training(self, x_cond, b, eta=0.):
         skip = self.config.diffusion.num_diffusion_timesteps // self.args.sampling_timesteps
         seq = range(0, self.config.diffusion.num_diffusion_timesteps, skip)
+        # list(seq) -- [0, 20, 40, 60, 80, 100, 120, 140, 160, 180]
         n, c, h, w = x_cond.shape
-        seq_next = [-1] + list(seq[:-1])
+        seq_next = [-1] + list(seq[:-1])  # [-1, 0, 20, 40, 60, 80, 100, 120, 140, 160]
         x = torch.randn(n, c, h, w, device=self.device)
         xs = [x]
+        # list(reversed(seq)) -- [180, 160, 140, 120, 100, 80, 60, 40, 20, 0]
+        # list(reversed(seq_next)) -- [160, 140, 120, 100, 80, 60, 40, 20, 0, -1]
+
         for i, j in zip(reversed(seq), reversed(seq_next)):
             t = (torch.ones(n) * i).to(x.device)
             next_t = (torch.ones(n) * j).to(x.device)
@@ -147,7 +151,7 @@ class Net(nn.Module):
             at_next = self.compute_alpha(b, next_t.long())
             xt = xs[-1].to(x.device)
 
-            et = self.Unet(torch.cat([x_cond, xt], dim=1), t)
+            et = self.Unet(torch.cat([x_cond, xt], dim=1), t) # DiffusionUNet
             x0_t = (xt - et * (1 - at).sqrt()) / at.sqrt()
 
             c1 = eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
@@ -158,6 +162,8 @@ class Net(nn.Module):
         return xs[-1]
 
     def forward(self, x):
+        # tensor [x] size: [1, 3, 416, 608], min: 0.0, max: 0.2, mean: 0.057457
+
         data_dict = {}
         dwt, idwt = DWT(), IWT()
 

@@ -56,9 +56,9 @@ class DWT(nn.Module):
         return dwt_init(x)
 
 
-class IWT(nn.Module):
+class IDWT(nn.Module):
     def __init__(self):
-        super(IWT, self).__init__()
+        super(IDWT, self).__init__()
         self.requires_grad = False
 
     def forward(self, x):

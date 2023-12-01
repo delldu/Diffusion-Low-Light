@@ -32,19 +32,17 @@ def get_light_model():
 
     print(f"Running on {device} ...")
 
-    # # make sure model good for C/C++
-    # # model = torch.compile(model)
+    # make sure model good for C/C++
+    model = torch.jit.script(model)
+    # https://github.com/pytorch/pytorch/issues/52286
+    torch._C._jit_set_profiling_executor(False)
+    # C++ Reference
+    # torch::jit::getProfilingMode() = false;
+    # torch::jit::setTensorExprFuserEnabled(false);
 
-    # model = torch.jit.script(model)
-    # # https://github.com/pytorch/pytorch/issues/52286
-    # torch._C._jit_set_profiling_executor(False)
-    # # C++ Reference
-    # # torch::jit::getProfilingMode() = false;
-    # # torch::jit::setTensorExprFuserEnabled(false);
-
-    # todos.data.mkdir("output")
-    # if not os.path.exists("output/image_lowlight.torch"):
-    #     model.save("output/image_lowlight.torch")
+    todos.data.mkdir("output")
+    if not os.path.exists("output/image_lowlight.torch"):
+        model.save("output/image_lowlight.torch")
 
     return model, device
 

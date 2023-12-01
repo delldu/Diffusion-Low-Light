@@ -199,14 +199,14 @@ class DiffusionUNet(nn.Module):
         super().__init__()
         self.config = config
         ch, out_ch, ch_mult = config.model.ch, config.model.out_ch, tuple(config.model.ch_mult)
-        num_res_blocks = config.model.num_res_blocks
+        num_res_blocks = config.model.num_res_blocks # 2
         dropout = config.model.dropout
         in_channels = config.model.in_channels * 2 if config.data.conditional else config.model.in_channels
-        resamp_with_conv = config.model.resamp_with_conv
+        resamp_with_conv = config.model.resamp_with_conv # True
 
         self.ch = ch
         self.temb_ch = self.ch*4
-        self.num_resolutions = len(ch_mult)
+        self.num_resolutions = len(ch_mult) # (1, 2, 3, 4)
         self.num_res_blocks = num_res_blocks
         self.in_channels = in_channels
 

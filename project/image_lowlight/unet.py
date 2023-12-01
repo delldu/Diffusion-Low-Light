@@ -2,6 +2,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import List
+
 import pdb
 
 # This script is from the following repositories
@@ -158,7 +160,6 @@ class DiffusionUNet(nn.Module):
         ema: True
         resamp_with_conv: True
     """
-
     def __init__(self):
         super().__init__()
         config = DictToClass(
@@ -200,25 +201,29 @@ class DiffusionUNet(nn.Module):
         in_ch_mult = (1,) + ch_mult
         self.down = nn.ModuleList()
         block_in = None
-        for i_level in range(self.num_resolutions):
+        for i_level in range(self.num_resolutions): # 4
             block = nn.ModuleList()
             attn = nn.ModuleList()
             block_in = self.ch * in_ch_mult[i_level]
             block_out = self.ch * ch_mult[i_level]
-            for i_block in range(self.num_res_blocks):
+            for j_block in range(self.num_res_blocks): # 2
                 block.append(
-                    ResnetBlock(
-                        in_channels=block_in, out_channels=block_out, temb_channels=self.temb_ch, dropout=dropout
-                    )
+                    ResnetBlock(in_channels=block_in, out_channels=block_out, temb_channels=self.temb_ch, dropout=dropout)
                 )
                 block_in = block_out
                 if i_level == 2:
                     attn.append(AttnBlock(block_in))
+                else:
+                    attn.append(nn.Identity())
+
+            # save down to self.down
             down = nn.Module()
             down.block = block
             down.attn = attn
             if i_level != self.num_resolutions - 1:
                 down.downsample = Downsample(block_in)
+            else:
+                down.downsample = nn.Identity()
             self.down.append(down)
 
         # middle
@@ -233,13 +238,13 @@ class DiffusionUNet(nn.Module):
 
         # upsampling
         self.up = nn.ModuleList()
-        for i_level in reversed(range(self.num_resolutions)):
+        for i_level in reversed(range(self.num_resolutions)): # 4
             block = nn.ModuleList()
             attn = nn.ModuleList()
             block_out = self.ch * ch_mult[i_level]
             skip_in = self.ch * ch_mult[i_level]
-            for i_block in range(self.num_res_blocks + 1):
-                if i_block == self.num_res_blocks:
+            for j_block in range(self.num_res_blocks + 1): # 3
+                if j_block == self.num_res_blocks:
                     skip_in = self.ch * in_ch_mult[i_level]
                 block.append(
                     ResnetBlock(
@@ -252,11 +257,17 @@ class DiffusionUNet(nn.Module):
                 block_in = block_out
                 if i_level == 2:
                     attn.append(AttnBlock(block_in))
+                else:
+                    attn.append(nn.Identity())
+
+            # save up to self.up
             up = nn.Module()
             up.block = block
             up.attn = attn
             if i_level != 0:
                 up.upsample = Upsample(block_in)
+            else:
+                up.upsample = nn.Identity()
             self.up.insert(0, up)  # prepend to get consistent order
 
         # end
@@ -264,8 +275,6 @@ class DiffusionUNet(nn.Module):
         self.conv_out = nn.Conv2d(block_in, out_ch, kernel_size=3, stride=1, padding=1)
 
     def forward(self, x, t):
-        # assert x.shape[2] == x.shape[3] == self.resolution
-
         # timestep embedding
         temb = get_timestep_embedding(t, self.ch)
         temb = self.temb.dense[0](temb)
@@ -274,14 +283,32 @@ class DiffusionUNet(nn.Module):
 
         # downsampling
         hs = [self.conv_in(x)]
-        for i_level in range(self.num_resolutions):
-            for i_block in range(self.num_res_blocks):
-                h = self.down[i_level].block[i_block](hs[-1], temb)
-                if len(self.down[i_level].attn) > 0:
-                    h = self.down[i_level].attn[i_block](h)
-                hs.append(h)
-            if i_level != self.num_resolutions - 1:
-                hs.append(self.down[i_level].downsample(hs[-1]))
+        # for i_level in range(self.num_resolutions): # 4
+        #     layer = self.down[i_level]
+
+        #     for j_block in range(self.num_res_blocks): # 2
+        #         h = layer.block[j_block](hs[-1], temb)
+        #         if i_level == 2:
+        #             h = layer.attn[j_block](h)
+        #         hs.append(h)
+        #     if i_level != 3:
+        #         hs.append(layer.downsample(hs[-1]))
+
+        for i_level, layer in enumerate(self.down): # 4
+            # j_block == 0
+            h = layer.block[0](hs[-1], temb)
+            if i_level == 2:
+                h = layer.attn[0](h)
+            hs.append(h)
+
+            # j_block == 1
+            h = layer.block[1](hs[-1], temb)
+            if i_level == 2:
+                h = layer.attn[1](h)
+            hs.append(h)
+
+            if i_level != 3:
+                hs.append(layer.downsample(hs[-1]))
 
         # middle
         h = hs[-1]
@@ -290,16 +317,48 @@ class DiffusionUNet(nn.Module):
         h = self.mid.block_2(h, temb)
 
         # upsampling
-        for i_level in reversed(range(self.num_resolutions)):
-            for i_block in range(self.num_res_blocks + 1):
-                h = self.up[i_level].block[i_block](torch.cat([h, hs.pop()], dim=1), temb)
-                if len(self.up[i_level].attn) > 0:
-                    h = self.up[i_level].attn[i_block](h)
-            if i_level != 0:
-                h = self.up[i_level].upsample(h)
+        # for i_level in reversed(range(self.num_resolutions)): # [3, 2, 1, 0]
+        #     up_m = self.up[i_level]
+
+        #     for j_block in range(self.num_res_blocks + 1):
+        #         t = torch.cat([h, hs.pop()], dim=1) # temp
+        #         h = up_m.block[j_block](t, temb)
+        #         if i_level == 2:
+        #             h = up_m.attn[j_block](h)
+        #     if i_level != 0:
+        #         h = up_m.upsample(h)
+        for i in range(self.num_resolutions):
+            h = self.up_layer(self.num_resolutions - i - 1, h, temb, hs) # layer_i
 
         # end
         h = self.norm_out(h)
         h = nonlinearity(h)
         h = self.conv_out(h)
+        return h
+
+    def up_layer(self, i: int, h, temb, hs: List[torch.Tensor]):
+        """ugly for torch.jit.script no reversed(), oh oh oh !!!"""
+        for i_level, layer in enumerate(self.up):
+            if i_level == i:
+                # j_block == 0
+                t = torch.cat([h, hs.pop()], dim=1) # temp
+                h = layer.block[0](t, temb)
+                if i_level == 2:
+                    h = layer.attn[0](h)
+
+                # j_block == 1
+                t = torch.cat([h, hs.pop()], dim=1) # temp
+                h = layer.block[1](t, temb)
+                if i_level == 2:
+                    h = layer.attn[1](h)
+
+                # j_block == 2
+                t = torch.cat([h, hs.pop()], dim=1) # temp
+                h = layer.block[2](t, temb)
+                if i_level == 2:
+                    h = layer.attn[2](h)
+
+                if i_level != 0:
+                    h = layer.upsample(h)
+
         return h
