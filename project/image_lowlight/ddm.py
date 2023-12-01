@@ -37,7 +37,13 @@ class DiffLLNet(nn.Module):
 
         # get_beta_schedule
         betas = np.linspace(0.0001, 0.02, self.num_timesteps, dtype=np.float64)
-        self.register_buffer("betas", torch.tensor(torch.from_numpy(betas).float()))
+        betas = torch.from_numpy(betas).float()
+        # self.register_buffer("betas", torch.tensor(betas))
+        self.register_buffer("betas", betas)
+        self.register_buffer("one_betas_cumprod1", (1.0 - betas).cumprod(dim=0))
+        betas = torch.cat([torch.zeros(1), betas], dim=0) # add zero at first
+        self.register_buffer("one_betas_cumprod2", (1.0 - betas).cumprod(dim=0))
+
 
         skip = self.num_timesteps // self.sampling_timesteps  # 200//10 ==> 20
         self.reversed_seq = [i for i in range(0, self.num_timesteps, skip)][::-1] # reverse [0, 20, ..., 160, 180]
@@ -52,22 +58,20 @@ class DiffLLNet(nn.Module):
         checkpoint = model_path if cdir == "" else cdir + "/" + model_path
         self.load_state_dict(torch.load(checkpoint))
 
-    @staticmethod
-    def compute_alpha(beta, t):
-        beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
-        a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
+    def compute_alpha(self, t):
+        a = self.one_betas_cumprod2.index_select(0, t + 1).view(-1, 1, 1, 1)
         return a
 
-    def sample_training(self, x_cond, b, eta: float=0.0):
-        # x_cond.size() -- [1, 3, 104, 152], b.size() -- [200]
+    def sample_training(self, x_cond, eta: float=0.0):
+        # x_cond.size() -- [1, 3, 104, 152]
         n, c, h, w = x_cond.shape
         x = torch.randn(n, c, h, w, device=x_cond.device)
         xs = [x]
         for i, j in zip(self.reversed_seq, self.reversed_next_seq):
             t = (torch.ones(n) * i).to(x.device)
             next_t = (torch.ones(n) * j).to(x.device)
-            at = self.compute_alpha(b, t.long())
-            at_next = self.compute_alpha(b, next_t.long())
+            at = self.compute_alpha(t.long())
+            at_next = self.compute_alpha(next_t.long())
             xt = xs[-1].to(x.device)
 
             et = self.Unet(torch.cat([x_cond, xt], dim=1), t)  # DiffusionUNet
@@ -99,18 +103,15 @@ class DiffLLNet(nn.Module):
         input_LL_LL, input_high1 = input_LL_dwt[:n, ...], input_LL_dwt[n:, ...]
         input_high1 = self.high_enhance1(input_high1)
 
-        # b = self.betas.to(input_img.device)
-        b = self.betas.to(x.device)
-
         # self.num_timesteps -- 200
         t = torch.randint(low=0, high=self.num_timesteps, size=(input_LL_LL.shape[0] // 2 + 1,)).to(x.device)
         t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[: input_LL_LL.shape[0]].to(x.device)
-        a = (1 - b).cumprod(dim=0).index_select(0, t).view(-1, 1, 1, 1)
+        a = self.one_betas_cumprod1.index_select(0, t).view(-1, 1, 1, 1)
 
         e = torch.randn_like(input_LL_LL)
 
         # input_LL_LL.size() -- [1, 3, 104, 152]
-        denoise_LL_LL = self.sample_training(input_LL_LL, b)  # size() -- [1, 3, 104, 152]
+        denoise_LL_LL = self.sample_training(input_LL_LL)  # size() -- [1, 3, 104, 152]
         # input_high1.size() -- [3, 3, 104, 152]
         # input_high0.size() -- [3, 3, 208, 304]
         pred_LL = self.idwt(torch.cat((denoise_LL_LL, input_high1), dim=0))  # size() -- [1, 3, 208, 304]
