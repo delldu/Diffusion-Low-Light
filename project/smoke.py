@@ -26,7 +26,7 @@ def test_input_shape():
     model, device = image_lowlight.get_light_model()
 
     N = 100
-    B, C, H, W = 1, 3, model.max_h, model.max_w
+    B, C, H, W = 1, 3, model.MAX_H, model.MAX_W
 
     mean_time = 0
     progress_bar = tqdm(total=N)
@@ -54,7 +54,7 @@ def run_bench_mark():
 
     model, device = image_lowlight.get_light_model()
     N = 100
-    B, C, H, W = 1, 3, model.max_h, model.max_w
+    B, C, H, W = 1, 3, model.MAX_H, model.MAX_W
 
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
@@ -79,7 +79,7 @@ def export_onnx_model():
 
     # 1. Run torch model
     model, device = image_lowlight.get_light_model()
-    B, C, H, W = 1, 3, model.max_h, model.max_w
+    B, C, H, W = 1, 3, model.MAX_H, model.MAX_W
     model.to(device)
 
     dummy_input = torch.randn(B, C, H, W).to(device)

@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import List
-
+import todos
 import pdb
 
 # This script is from the following repositories
@@ -26,6 +26,7 @@ def get_timestep_embedding(timesteps, embedding_dim: int):
     from the description in Section 3.5 of "Attention Is All You Need".
     """
     assert len(timesteps.shape) == 1
+    # embedding_dim === 64
 
     half_dim = embedding_dim // 2
     emb = math.log(10000) / (half_dim - 1)
@@ -33,8 +34,9 @@ def get_timestep_embedding(timesteps, embedding_dim: int):
     emb = emb.to(device=timesteps.device)
     emb = timesteps.float()[:, None] * emb[None, :]
     emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-    if embedding_dim % 2 == 1:  # zero pad
-        emb = F.pad(emb, (0, 1, 0, 0))
+    # 
+    # if embedding_dim % 2 == 1:  # zero pad 
+    #     emb = F.pad(emb, (0, 1, 0, 0))
     return emb
 
 
@@ -71,19 +73,21 @@ class Downsample(nn.Module):
 
 
 class ResnetBlock(nn.Module):
-    def __init__(self, *, in_channels, out_channels=None, dropout, temb_channels=512):
+    def __init__(self, *, in_channels, out_channels, 
+        # dropout, 
+        temb_channels=512):
         super().__init__()
-        self.in_channels = in_channels
-        out_channels = in_channels if out_channels is None else out_channels
-        self.out_channels = out_channels
+        # self.in_channels = in_channels
+        # out_channels = in_channels if out_channels is None else out_channels
+        # self.out_channels = out_channels
 
         self.norm1 = Normalize(in_channels)
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         self.temb_proj = nn.Linear(temb_channels, out_channels)
         self.norm2 = Normalize(out_channels)
-        self.dropout = nn.Dropout(dropout)
+        # self.dropout = nn.Dropout(dropout)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
-        if self.in_channels != self.out_channels:
+        if in_channels != out_channels:
             self.nin_shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
         else:  # Support torch.jit.script
             self.nin_shortcut = nn.Identity()
@@ -98,7 +102,7 @@ class ResnetBlock(nn.Module):
 
         h = self.norm2(h)
         h = nonlinearity(h)
-        h = self.dropout(h)
+        # h = self.dropout(h)
         h = self.conv2(h)
 
         x = self.nin_shortcut(x)
@@ -109,7 +113,7 @@ class ResnetBlock(nn.Module):
 class AttnBlock(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
-        self.in_channels = in_channels
+        # self.in_channels = in_channels
 
         self.norm = Normalize(in_channels)
         self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
@@ -169,22 +173,22 @@ class DiffusionUNet(nn.Module):
                 "out_ch": 3,
                 "ch_mult": [1, 2, 3, 4],
                 "num_res_blocks": 2,
-                "dropout": 0.0,
-                "ema_rate": 0.999,
-                "ema": True,
-                "resamp_with_conv": True,
+                # "dropout": 0.0,
+                # "ema_rate": 0.999,
+                # "ema": True,
+                # "resamp_with_conv": True,
             }
         )
 
         out_ch, ch_mult = config.out_ch, tuple(config.ch_mult)
-        dropout = config.dropout
+        # dropout = config.dropout
         in_channels = config.in_channels * 2
 
         self.ch = config.ch
         self.temb_ch = self.ch * 4
         self.num_resolutions = len(ch_mult)  # (1, 2, 3, 4)
         self.num_res_blocks = config.num_res_blocks  # 2
-        self.in_channels = in_channels
+        # self.in_channels = in_channels
 
         # timestep embedding
         self.temb = nn.Module()
@@ -208,7 +212,11 @@ class DiffusionUNet(nn.Module):
             block_out = self.ch * ch_mult[i_level]
             for j_block in range(self.num_res_blocks): # 2
                 block.append(
-                    ResnetBlock(in_channels=block_in, out_channels=block_out, temb_channels=self.temb_ch, dropout=dropout)
+                    ResnetBlock(in_channels=block_in, 
+                        out_channels=block_out, 
+                        temb_channels=self.temb_ch, 
+                        # dropout=dropout,
+                    )
                 )
                 block_in = block_out
                 if i_level == 2:
@@ -229,11 +237,17 @@ class DiffusionUNet(nn.Module):
         # middle
         self.mid = nn.Module()
         self.mid.block_1 = ResnetBlock(
-            in_channels=block_in, out_channels=block_in, temb_channels=self.temb_ch, dropout=dropout
+            in_channels=block_in, 
+            out_channels=block_in, 
+            temb_channels=self.temb_ch, 
+            # dropout=dropout,
         )
         self.mid.attn_1 = AttnBlock(block_in)
         self.mid.block_2 = ResnetBlock(
-            in_channels=block_in, out_channels=block_in, temb_channels=self.temb_ch, dropout=dropout
+            in_channels=block_in, 
+            out_channels=block_in, 
+            temb_channels=self.temb_ch, 
+            # dropout=dropout
         )
 
         # upsampling
@@ -251,7 +265,7 @@ class DiffusionUNet(nn.Module):
                         in_channels=block_in + skip_in,
                         out_channels=block_out,
                         temb_channels=self.temb_ch,
-                        dropout=dropout,
+                        # dropout=dropout,
                     )
                 )
                 block_in = block_out
@@ -276,10 +290,13 @@ class DiffusionUNet(nn.Module):
 
     def forward(self, x, t):
         # timestep embedding
-        temb = get_timestep_embedding(t, self.ch)
+        # tensor [x] size: [1, 6, 104, 152], min: -4.282167, max: 4.096376, mean: -1.599347
+
+        temb = get_timestep_embedding(t, self.ch) # self.ch -- 64
         temb = self.temb.dense[0](temb)
         temb = nonlinearity(temb)
         temb = self.temb.dense[1](temb)
+        # tensor [temb] size: [1, 256], min: -0.871082, max: 1.723449, mean: -0.008054
 
         # downsampling
         hs: List[torch.Tensor] = [self.conv_in(x)]
@@ -294,6 +311,7 @@ class DiffusionUNet(nn.Module):
         #     if i_level != 3:
         #         hs.append(layer.downsample(hs[-1]))
 
+        # self.down
         for i_level, layer in enumerate(self.down): # 4
             # j_block == 0
             h = layer.block[0](hs[-1], temb)
@@ -315,6 +333,19 @@ class DiffusionUNet(nn.Module):
         h = self.mid.block_1(h, temb)
         h = self.mid.attn_1(h)
         h = self.mid.block_2(h, temb)
+        # hs is list: len = 12
+        #     tensor [item] size: [1, 64, 104, 152], min: -5.427055, max: 5.175838, mean: 0.09154
+        #     tensor [item] size: [1, 64, 104, 152], min: -5.481779, max: 3.873219, mean: -0.006917
+        #     tensor [item] size: [1, 64, 104, 152], min: -4.302104, max: 3.807791, mean: -0.026712
+        #     tensor [item] size: [1, 64, 52, 76], min: -7.558912, max: 7.079768, mean: -0.108372
+        #     tensor [item] size: [1, 128, 52, 76], min: -7.573772, max: 6.496333, mean: -0.219393
+        #     tensor [item] size: [1, 128, 52, 76], min: -8.043532, max: 7.549368, mean: -0.163927
+        #     tensor [item] size: [1, 128, 26, 38], min: -11.86776, max: 12.161048, mean: 0.124282
+        #     tensor [item] size: [1, 192, 26, 38], min: -8.872528, max: 8.24645, mean: -0.208329
+        #     tensor [item] size: [1, 192, 26, 38], min: -9.235559, max: 9.142941, mean: -0.340875
+        #     tensor [item] size: [1, 192, 13, 19], min: -12.373027, max: 11.783667, mean: -0.235998
+        #     tensor [item] size: [1, 256, 13, 19], min: -8.06118, max: 6.511265, mean: -0.122389
+        #     tensor [item] size: [1, 256, 13, 19], min: -9.340825, max: 6.803284, mean: -0.243598
 
         # upsampling
         # for i_level in reversed(range(self.num_resolutions)): # [3, 2, 1, 0]
@@ -327,7 +358,7 @@ class DiffusionUNet(nn.Module):
         #             h = up_m.attn[j_block](h)
         #     if i_level != 0:
         #         h = up_m.upsample(h)
-        for i in range(self.num_resolutions):
+        for i in range(self.num_resolutions): # 4
             h = self.up_layer(self.num_resolutions - i - 1, h, temb, hs) # layer_i
 
         # end
@@ -338,6 +369,7 @@ class DiffusionUNet(nn.Module):
 
     def up_layer(self, i: int, h, temb, hs: List[torch.Tensor]):
         """ugly for torch.jit.script no reversed(), oh oh oh !!!"""
+        # len(self.up) -- 4
         for i_level, layer in enumerate(self.up):
             if i_level == i:
                 # j_block == 0

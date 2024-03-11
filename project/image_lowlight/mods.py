@@ -21,7 +21,7 @@ class cross_attention(nn.Module):
         self.key = Depth_conv(in_ch=dim, out_ch=dim)
         self.value = Depth_conv(in_ch=dim, out_ch=dim)
 
-        self.dropout = nn.Dropout(dropout)
+        # self.dropout = nn.Dropout(dropout)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, hidden_states, ctx):
@@ -38,7 +38,7 @@ class cross_attention(nn.Module):
 
         attention_probs = self.softmax(attention_scores)
 
-        attention_probs = self.dropout(attention_probs)
+        # attention_probs = self.dropout(attention_probs)
 
         ctx_layer = torch.matmul(attention_probs, value_layer)
         ctx_layer = ctx_layer.permute(0, 2, 1, 3).contiguous()
