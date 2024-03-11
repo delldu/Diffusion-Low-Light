@@ -74,26 +74,39 @@ def export_onnx_model():
     import onnx
     import onnxruntime
     from onnxsim import simplify
+    import onnxoptimizer
 
     print("Export onnx model ...")
 
     # 1. Run torch model
     model, device = image_lowlight.get_light_model()
-    B, C, H, W = 1, 3, model.MAX_H, model.MAX_W
+    model = model.Unet
     model.to(device)
 
+    B, C, H, W = 1, 6, 128, 128 # model.MAX_H, model.MAX_W
     dummy_input = torch.randn(B, C, H, W).to(device)
+    timestep_input = torch.ones(B).to(device)
     with torch.no_grad():
-        dummy_output = model(dummy_input)
+        dummy_output = model(dummy_input, timestep_input)
     torch_outputs = [dummy_output.cpu()]
 
     # 2. Export onnx model
-    input_names = ["input"]
+    input_names = ["input", "timestep"]
     output_names = ["output"]
+    dynamic_axes = { 
+        'input' : {2: 'height', 3: 'width'}, 
+        'output' : {2: 'height', 3: 'width'} 
+    }    
     onnx_filename = "output/image_lowlight.onnx"
 
     torch.onnx.export(
-        model, dummy_input, onnx_filename, verbose=False, input_names=input_names, output_names=output_names
+        model, 
+        (dummy_input, timestep_input), 
+        onnx_filename, 
+        verbose=False, 
+        input_names=input_names, 
+        output_names=output_names,
+        dynamic_axes=dynamic_axes,
     )
 
     # 3. Check onnx model file
@@ -102,6 +115,7 @@ def export_onnx_model():
 
     onnx_model, check = simplify(onnx_model)
     assert check, "Simplified ONNX model could not be validated"
+    onnx_model = onnxoptimizer.optimize(onnx_model)
     onnx.save(onnx_model, onnx_filename)
     # print(onnx.helper.printable_graph(onnx_model.graph))
 
@@ -114,7 +128,7 @@ def export_onnx_model():
     def to_numpy(tensor):
         return tensor.detach().cpu().numpy() if tensor.requires_grad else tensor.cpu().numpy()
 
-    onnx_inputs = {input_names[0]: to_numpy(dummy_input)}
+    onnx_inputs = {input_names[0]: to_numpy(dummy_input), input_names[1]: to_numpy(timestep_input)}
     onnx_outputs = ort_session.run(None, onnx_inputs)
 
     # 5.Compare output results

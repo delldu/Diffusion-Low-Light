@@ -18,22 +18,18 @@ class DictToClass(object):
 
 
 def get_timestep_embedding(timesteps, embedding_dim: int):
-    """
-    This matches the implementation in Denoising Diffusion Probabilistic Models:
-    From Fairseq.
-    Build sinusoidal embeddings.
-    This matches the implementation in tensor2tensor, but differs slightly
-    from the description in Section 3.5 of "Attention Is All You Need".
-    """
     assert len(timesteps.shape) == 1
     # embedding_dim === 64
 
     half_dim = embedding_dim // 2
-    emb = math.log(10000) / (half_dim - 1)
-    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
-    emb = emb.to(device=timesteps.device)
-    emb = timesteps.float()[:, None] * emb[None, :]
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
+    # emb = math.log(10000) / (half_dim - 1) # 0.2971077539347156
+    # emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
+    emb = torch.exp(-0.2971 * torch.arange(half_dim, dtype=torch.float32))
+    emb = emb.to(timesteps.device) # size() -- [32]
+
+    # emb = timesteps.float()[:, None] * emb[None, :] # size() -- [1, 32]
+    emb = timesteps * emb[None, :] # size() -- [1, 32]
+    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1) # size() -- [1, 64]
     # 
     # if embedding_dim % 2 == 1:  # zero pad 
     #     emb = F.pad(emb, (0, 1, 0, 0))
@@ -77,10 +73,6 @@ class ResnetBlock(nn.Module):
         # dropout, 
         temb_channels=512):
         super().__init__()
-        # self.in_channels = in_channels
-        # out_channels = in_channels if out_channels is None else out_channels
-        # self.out_channels = out_channels
-
         self.norm1 = Normalize(in_channels)
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         self.temb_proj = nn.Linear(temb_channels, out_channels)
@@ -113,8 +105,6 @@ class ResnetBlock(nn.Module):
 class AttnBlock(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
-        # self.in_channels = in_channels
-
         self.norm = Normalize(in_channels)
         self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
         self.k = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
@@ -164,31 +154,18 @@ class DiffusionUNet(nn.Module):
         ema: True
         resamp_with_conv: True
     """
-    def __init__(self):
+    def __init__(self,
+            in_channels = 3,
+            out_ch = 3,
+            ch = 64,
+            ch_mult = (1, 2, 3, 4),
+        ):
         super().__init__()
-        config = DictToClass(
-            {
-                "in_channels": 3,
-                "ch": 64,
-                "out_ch": 3,
-                "ch_mult": [1, 2, 3, 4],
-                "num_res_blocks": 2,
-                # "dropout": 0.0,
-                # "ema_rate": 0.999,
-                # "ema": True,
-                # "resamp_with_conv": True,
-            }
-        )
 
-        out_ch, ch_mult = config.out_ch, tuple(config.ch_mult)
-        # dropout = config.dropout
-        in_channels = config.in_channels * 2
-
-        self.ch = config.ch
+        self.ch = ch
         self.temb_ch = self.ch * 4
         self.num_resolutions = len(ch_mult)  # (1, 2, 3, 4)
-        self.num_res_blocks = config.num_res_blocks  # 2
-        # self.in_channels = in_channels
+        self.num_res_blocks = 2
 
         # timestep embedding
         self.temb = nn.Module()
@@ -200,10 +177,11 @@ class DiffusionUNet(nn.Module):
         )
 
         # downsampling
-        self.conv_in = nn.Conv2d(in_channels, self.ch, kernel_size=3, stride=1, padding=1)
+        self.conv_in = nn.Conv2d(in_channels * 2, self.ch, kernel_size=3, stride=1, padding=1)
 
         in_ch_mult = (1,) + ch_mult
         self.down = nn.ModuleList()
+
         block_in = None
         for i_level in range(self.num_resolutions): # 4
             block = nn.ModuleList()
@@ -215,7 +193,6 @@ class DiffusionUNet(nn.Module):
                     ResnetBlock(in_channels=block_in, 
                         out_channels=block_out, 
                         temb_channels=self.temb_ch, 
-                        # dropout=dropout,
                     )
                 )
                 block_in = block_out
@@ -240,14 +217,12 @@ class DiffusionUNet(nn.Module):
             in_channels=block_in, 
             out_channels=block_in, 
             temb_channels=self.temb_ch, 
-            # dropout=dropout,
         )
         self.mid.attn_1 = AttnBlock(block_in)
         self.mid.block_2 = ResnetBlock(
             in_channels=block_in, 
             out_channels=block_in, 
             temb_channels=self.temb_ch, 
-            # dropout=dropout
         )
 
         # upsampling
@@ -265,7 +240,6 @@ class DiffusionUNet(nn.Module):
                         in_channels=block_in + skip_in,
                         out_channels=block_out,
                         temb_channels=self.temb_ch,
-                        # dropout=dropout,
                     )
                 )
                 block_in = block_out
@@ -282,11 +256,17 @@ class DiffusionUNet(nn.Module):
                 up.upsample = Upsample(block_in)
             else:
                 up.upsample = nn.Identity()
+
+            # Update up to self.up                
             self.up.insert(0, up)  # prepend to get consistent order
 
         # end
         self.norm_out = Normalize(block_in)
         self.conv_out = nn.Conv2d(block_in, out_ch, kernel_size=3, stride=1, padding=1)
+
+        # ===> 
+        # self.up -- (block/attn/upsample)
+        # self.down -- (block/attn/downsample)
 
     def forward(self, x, t):
         # timestep embedding

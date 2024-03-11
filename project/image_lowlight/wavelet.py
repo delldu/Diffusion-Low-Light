@@ -14,7 +14,7 @@ def dwt_init(x):
     x_LH = -x1 + x2 - x3 + x4
     x_HH = x1 - x2 - x3 + x4
 
-    return torch.cat((x_LL, x_HL, x_LH, x_HH), 0)
+    return torch.cat((x_LL, x_HL, x_LH, x_HH), dim=0)
 
 
 # haar wavelet
@@ -39,8 +39,8 @@ def idwt_init(x):
 
 class DWT(nn.Module):
     def __init__(self):
-        super(DWT, self).__init__()
-        self.requires_grad = False
+        super().__init__()
+        # self.requires_grad = False
 
     def forward(self, x):
         return dwt_init(x)
@@ -48,8 +48,8 @@ class DWT(nn.Module):
 
 class IDWT(nn.Module):
     def __init__(self):
-        super(IDWT, self).__init__()
-        self.requires_grad = False
+        super().__init__()
+        # self.requires_grad = False
 
     def forward(self, x):
         return idwt_init(x)

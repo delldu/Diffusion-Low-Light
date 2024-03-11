@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 class cross_attention(nn.Module):
     def __init__(self, dim, num_heads, dropout=0.0):
-        super(cross_attention, self).__init__()
+        super().__init__()
         if dim % num_heads != 0:
             raise ValueError(
                 "The hidden size (%d) is not a multiple of the number of attention " "heads (%d)" % (dim, num_heads)
@@ -48,7 +48,7 @@ class cross_attention(nn.Module):
 
 class Depth_conv(nn.Module):
     def __init__(self, in_ch, out_ch):
-        super(Depth_conv, self).__init__()
+        super().__init__()
         self.depth_conv = nn.Conv2d(
             in_channels=in_ch, out_channels=in_ch, kernel_size=(3, 3), stride=(1, 1), padding=1, groups=in_ch
         )
@@ -64,7 +64,7 @@ class Depth_conv(nn.Module):
 
 class Dilated_Resblock(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(Dilated_Resblock, self).__init__()
+        super().__init__()
 
         sequence = list()
         sequence += [
@@ -89,7 +89,7 @@ class Dilated_Resblock(nn.Module):
 
 class HFRM(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(HFRM, self).__init__()
+        super().__init__()
 
         self.conv_head = Depth_conv(in_channels, out_channels)
 

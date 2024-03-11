@@ -21,7 +21,7 @@ def inverse_data_transform(X):
 
 class DiffLLNet(nn.Module):
     def __init__(self):
-        super(DiffLLNet, self).__init__()
+        super().__init__()
         self.MAX_H = 1024
         self.MAX_W = 1024
         self.MAX_TIMES = 32
@@ -80,7 +80,10 @@ class DiffLLNet(nn.Module):
             at_next = self.compute_alpha(next_t.long())
             xt = xs[-1].to(x.device)
 
+            ####################################################################
             et = self.Unet(torch.cat([x_cond, xt], dim=1), t)  # DiffusionUNet
+            ####################################################################
+
             x0_t = (xt - et * (1 - at).sqrt()) / at.sqrt()
 
             c1 = eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
@@ -128,28 +131,26 @@ class DiffLLNet(nn.Module):
         n, c, h, w = input_img.shape
         input_img_norm = data_transform(input_img)
         input_dwt = self.dwt(input_img_norm)
+        # tensor [input_img_norm] size: [1, 3, 416, 608], min: -1.0, max: -0.090196, mean: -0.800914
+        # tensor [input_dwt] size: [4, 3, 208, 304], min: -2.0, max: 0.498039, mean: -0.400283
 
         input_LL, input_high0 = input_dwt[:n, ...], input_dwt[n:, ...]
-
+        # input_high0.size() -- [3, 3, 208, 304]
         input_high0 = self.high_enhance0(input_high0)
 
         input_LL_dwt = self.dwt(input_LL)
         input_LL_LL, input_high1 = input_LL_dwt[:n, ...], input_LL_dwt[n:, ...]
         input_high1 = self.high_enhance1(input_high1)
 
-        # self.num_timesteps -- 200
-        t = torch.randint(low=0, high=self.num_timesteps, size=(input_LL_LL.shape[0] // 2 + 1,)).to(x.device)
-        t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[: input_LL_LL.shape[0]].to(x.device)
-        a = self.one_betas_cumprod1.index_select(0, t).view(-1, 1, 1, 1)
-
-        e = torch.randn_like(input_LL_LL)
-
         # input_LL_LL.size() -- [1, 3, 104, 152]
+        #################################################################################
         denoise_LL_LL = self.sample_training(input_LL_LL)  # size() -- [1, 3, 104, 152]
+        #################################################################################
+
         # input_high1.size() -- [3, 3, 104, 152]
         # input_high0.size() -- [3, 3, 208, 304]
         pred_LL = self.idwt(torch.cat((denoise_LL_LL, input_high1), dim=0))  # size() -- [1, 3, 208, 304]
         pred_x = self.idwt(torch.cat((pred_LL, input_high0), dim=0))
         pred_x = inverse_data_transform(pred_x)  # size() -- [1, 3, 416, 608]
 
-        return pred_x[:, :, 0:H, 0:W]
+        return pred_x[:, :, 0:H, 0:W].clamp(0.0, 1.0)
