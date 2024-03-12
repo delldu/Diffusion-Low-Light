@@ -13,6 +13,7 @@ import os
 import torch
 import image_lowlight
 import argparse
+import todos
 import pdb
 
 
@@ -79,7 +80,7 @@ def export_denoise_onnx_model():
     print("Export low light denoise onnx model ...")
 
     # 1. Run torch model
-    model, device = image_lowlight.get_low_light_denoise_model()
+    model, device = image_lowlight.get_low_light_denoise_model() # .get_light_model() #
     model.to(device)
 
     B, C, H, W = 1, 6, 128, 128
@@ -135,6 +136,7 @@ def export_denoise_onnx_model():
     for torch_output, onnx_output in zip(torch_outputs, onnx_outputs):
         torch.testing.assert_close(torch_output, torch.tensor(onnx_output), rtol=0.01, atol=0.01)
 
+    todos.model.reset_device()
     print("!!!!!! Torch and ONNX Runtime output matched !!!!!!")
 
 
@@ -202,6 +204,8 @@ def export_encoder_onnx_model():
     for torch_output, onnx_output in zip(torch_outputs, onnx_outputs):
         torch.testing.assert_close(torch_output, torch.tensor(onnx_output), rtol=0.01, atol=0.01)
 
+    todos.model.reset_device()
+
     print("!!!!!! Torch and ONNX Runtime output matched !!!!!!")
 
 def export_decoder_onnx_model():
@@ -216,20 +220,15 @@ def export_decoder_onnx_model():
     model, device = image_lowlight.get_low_light_decoder_model()
     model.to(device)
 
-    # x_l_l.size() -- [1, 3, 128, 128]
-    # x_l_h.size() -- [3, 3, 128, 128]
-    # x_h_dwt.size() [12, 3, 128, 128]
-    B, C, H, W = 1, 3, 128, 128
-    dummy_input1 = torch.randn(1, C, H, W).to(device)
-    dummy_input2 = torch.randn(3, C, H, W).to(device)
-    dummy_input3 = torch.randn(12, C, H, W).to(device)
+    B, C, H, W = 1, 16, 128, 128
+    dummy_input = torch.randn(1, C, H, W).to(device)
 
     with torch.no_grad():
-        dummy_output = model(dummy_input1, dummy_input2, dummy_input3)
+        dummy_output = model(dummy_input)
     torch_outputs = [dummy_output.cpu()]
 
     # 2. Export onnx model
-    input_names = ["input1", "input2", "input3"]
+    input_names = ["input"]
     output_names = ["output"]
     dynamic_axes = { 
         'input' : {2: 'height', 3: 'width'}, 
@@ -239,9 +238,9 @@ def export_decoder_onnx_model():
 
     torch.onnx.export(
         model, 
-        (dummy_input1, dummy_input2, dummy_input3), 
+        (dummy_input), 
         onnx_filename, 
-        verbose=False, 
+        verbose=False,
         input_names=input_names, 
         output_names=output_names,
         dynamic_axes=dynamic_axes,
@@ -266,16 +265,15 @@ def export_decoder_onnx_model():
     def to_numpy(tensor):
         return tensor.detach().cpu().numpy() if tensor.requires_grad else tensor.cpu().numpy()
 
-    onnx_inputs = { input_names[0]: to_numpy(dummy_input1), 
-                    input_names[1]: to_numpy(dummy_input2),
-                    input_names[2]: to_numpy(dummy_input3),
-                }
+    onnx_inputs = { input_names[0]: to_numpy(dummy_input)}
     onnx_outputs = ort_session.run(None, onnx_inputs)
 
     # 5.Compare output results
     assert len(torch_outputs) == len(onnx_outputs)
     for torch_output, onnx_output in zip(torch_outputs, onnx_outputs):
         torch.testing.assert_close(torch_output, torch.tensor(onnx_output), rtol=0.01, atol=0.01)
+
+    todos.model.reset_device()
 
     print("!!!!!! Torch and ONNX Runtime output matched !!!!!!")
 
@@ -293,7 +291,7 @@ if __name__ == "__main__":
         run_bench_mark()
     if args.export_onnx:
         export_encoder_onnx_model()
-        # export_denoise_onnx_model()
+        export_denoise_onnx_model() # trace mode
         export_decoder_onnx_model()
 
     if not (args.shape_test or args.bench_mark or args.export_onnx):

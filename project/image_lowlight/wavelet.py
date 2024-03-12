@@ -5,7 +5,7 @@ import torch.nn as nn
 class DWT(nn.Module):
     def __init__(self):
         super().__init__()
-        # self.requires_grad = False
+        self.requires_grad = False
 
     def forward(self, x):
         x01 = x[:, :, 0::2, :] / 2.0
@@ -24,18 +24,17 @@ class DWT(nn.Module):
 class IDWT(nn.Module):
     def __init__(self):
         super().__init__()
-        # self.requires_grad = False
+        self.requires_grad = False
 
     def forward(self, x):
-        r = 2
-        in_batch, in_channel, in_height, in_width = x.size()
-        out_batch, out_channel, out_height, out_width = int(in_batch / (r**2)), in_channel, r * in_height, r * in_width
-        x1 = x[0:out_batch, :, :] / 2.0
-        x2 = x[out_batch : out_batch * 2, :, :, :] / 2.0
-        x3 = x[out_batch * 2 : out_batch * 3, :, :, :] / 2.0
-        x4 = x[out_batch * 3 : out_batch * 4, :, :, :] / 2.0
+        B1, C1, H1, W1 = x.size()
+        B2, C2, H2, W2 = B1 // 4, C1, 2 * H1, 2 * W1
+        x1 = x[0:B2, :, :, :] / 2.0
+        x2 = x[B2 : B2 * 2, :, :, :] / 2.0
+        x3 = x[B2 * 2 : B2 * 3, :, :, :] / 2.0
+        x4 = x[B2 * 3 : B2 * 4, :, :, :] / 2.0
 
-        h = torch.zeros([out_batch, out_channel, out_height, out_width]).float().to(x.device)
+        h = torch.zeros([B2, C2, H2, W2]).float().to(x.device)
 
         h[:, :, 0::2, 0::2] = x1 - x2 - x3 + x4
         h[:, :, 1::2, 0::2] = x1 - x2 + x3 - x4
