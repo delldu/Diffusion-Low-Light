@@ -19,6 +19,50 @@ from . import ddm
 
 import pdb
 
+def get_low_light_encoder_model():
+    """Create model."""
+
+    model = ddm.LowLightEncoder()
+    device = todos.model.get_device()
+    model = model.to(device)
+    model.eval()
+
+    print(f"Running on {device} ...")
+    model = torch.jit.script(model)
+
+    return model, device
+
+def get_low_light_denoise_model():
+    """Create model."""
+
+    model = ddm.DiffLLNet().Unet
+
+    device = todos.model.get_device()
+    model = model.to(device)
+    model.eval()
+
+    print(f"Running on {device} ...")
+    model = torch.jit.script(model)
+
+    return model, device
+
+
+
+def get_low_light_decoder_model():
+    """Create model."""
+
+    model = ddm.LowLightDecoder()
+
+    device = todos.model.get_device()
+    model = model.to(device)
+    model.eval()
+
+    print(f"Running on {device} ...")
+    model = torch.jit.script(model)
+
+    return model, device
+
+
 
 def get_light_model():
     """Create model."""
@@ -68,6 +112,9 @@ def image_predict(input_files, output_dir):
         orig_tensor = input_tensor.clone().detach()
         predict_tensor = todos.model.forward(model, device, input_tensor)
         output_file = f"{output_dir}/{os.path.basename(filename)}"
+
+        # todos.debug.output_var("orig_tensor", orig_tensor)
+        # todos.debug.output_var("predict_tensor", predict_tensor)
 
         todos.data.save_tensor([orig_tensor, predict_tensor], output_file)
     todos.model.reset_device()

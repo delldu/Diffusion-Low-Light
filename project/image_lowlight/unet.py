@@ -1,20 +1,14 @@
-import math
+import os
+# import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import List
-import todos
 import pdb
 
 # This script is from the following repositories
 # https://github.com/ermongroup/ddim
 # https://github.com/bahjat-kawar/ddrm
-
-
-class DictToClass(object):
-    def __init__(self, _obj):
-        if _obj:
-            self.__dict__.update(_obj)
 
 
 def get_timestep_embedding(timesteps, embedding_dim: int):
@@ -264,7 +258,8 @@ class DiffusionUNet(nn.Module):
         self.norm_out = Normalize(block_in)
         self.conv_out = nn.Conv2d(block_in, out_ch, kernel_size=3, stride=1, padding=1)
 
-        # ===> 
+        self.load_weights()
+        # ===================================================== 
         # self.up -- (block/attn/upsample)
         # self.down -- (block/attn/downsample)
 
@@ -278,7 +273,7 @@ class DiffusionUNet(nn.Module):
         temb = self.temb.dense[1](temb)
         # tensor [temb] size: [1, 256], min: -0.871082, max: 1.723449, mean: -0.008054
 
-        # downsampling
+        # down sampling
         hs: List[torch.Tensor] = [self.conv_in(x)]
         # for i_level in range(self.num_resolutions): # 4
         #     layer = self.down[i_level]
@@ -291,20 +286,18 @@ class DiffusionUNet(nn.Module):
         #     if i_level != 3:
         #         hs.append(layer.downsample(hs[-1]))
 
-        # self.down
         for i_level, layer in enumerate(self.down): # 4
             # j_block == 0
             h = layer.block[0](hs[-1], temb)
-            if i_level == 2:
-                h = layer.attn[0](h)
+            h = layer.attn[0](h)
             hs.append(h)
 
             # j_block == 1
             h = layer.block[1](hs[-1], temb)
-            if i_level == 2:
-                h = layer.attn[1](h)
+            h = layer.attn[1](h)
             hs.append(h)
 
+            # xxxx_8888
             if i_level != 3:
                 hs.append(layer.downsample(hs[-1]))
 
@@ -327,7 +320,7 @@ class DiffusionUNet(nn.Module):
         #     tensor [item] size: [1, 256, 13, 19], min: -8.06118, max: 6.511265, mean: -0.122389
         #     tensor [item] size: [1, 256, 13, 19], min: -9.340825, max: 6.803284, mean: -0.243598
 
-        # upsampling
+        # up sampling
         # for i_level in reversed(range(self.num_resolutions)): # [3, 2, 1, 0]
         #     up_m = self.up[i_level]
 
@@ -338,6 +331,8 @@ class DiffusionUNet(nn.Module):
         #             h = up_m.attn[j_block](h)
         #     if i_level != 0:
         #         h = up_m.upsample(h)
+
+        # pdb.set_trace()
         for i in range(self.num_resolutions): # 4
             h = self.up_layer(self.num_resolutions - i - 1, h, temb, hs) # layer_i
 
@@ -355,22 +350,32 @@ class DiffusionUNet(nn.Module):
                 # j_block == 0
                 t = torch.cat([h, hs.pop()], dim=1) # temp
                 h = layer.block[0](t, temb)
-                if i_level == 2:
-                    h = layer.attn[0](h)
+                h = layer.attn[0](h)
 
                 # j_block == 1
                 t = torch.cat([h, hs.pop()], dim=1) # temp
                 h = layer.block[1](t, temb)
-                if i_level == 2:
-                    h = layer.attn[1](h)
+                h = layer.attn[1](h)
 
                 # j_block == 2
                 t = torch.cat([h, hs.pop()], dim=1) # temp
                 h = layer.block[2](t, temb)
-                if i_level == 2:
-                    h = layer.attn[2](h)
+                h = layer.attn[2](h)
 
-                if i_level != 0:
-                    h = layer.upsample(h)
-
+                # xxxx_8888
+                # if i_level != 0:
+                #     h = layer.upsample(h)
+                h = layer.upsample(h)
         return h
+
+    def load_weights(self, model_path="models/image_lowlight.pth"):
+        cdir = os.path.dirname(__file__)
+        checkpoint = model_path if cdir == "" else cdir + "/" + model_path
+        sd = torch.load(checkpoint)
+        # load unet weights
+        new_sd = {}
+        for k, v in sd.items():
+            if k.startswith("Unet."):
+                k = k.replace("Unet.", "")
+                new_sd[k] = v
+        self.load_state_dict(new_sd)

@@ -7,7 +7,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
-class cross_attention(nn.Module):
+class CrossAttention(nn.Module):
     def __init__(self, dim, num_heads, dropout=0.0):
         super().__init__()
         if dim % num_heads != 0:
@@ -17,9 +17,9 @@ class cross_attention(nn.Module):
         self.num_heads = num_heads
         self.attention_head_size = int(dim / num_heads)
 
-        self.query = Depth_conv(in_ch=dim, out_ch=dim)
-        self.key = Depth_conv(in_ch=dim, out_ch=dim)
-        self.value = Depth_conv(in_ch=dim, out_ch=dim)
+        self.query = DepthConv(in_ch=dim, out_ch=dim)
+        self.key = DepthConv(in_ch=dim, out_ch=dim)
+        self.value = DepthConv(in_ch=dim, out_ch=dim)
 
         # self.dropout = nn.Dropout(dropout)
         self.softmax = nn.Softmax(dim=-1)
@@ -46,7 +46,7 @@ class cross_attention(nn.Module):
         return ctx_layer
 
 
-class Depth_conv(nn.Module):
+class DepthConv(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.depth_conv = nn.Conv2d(
@@ -91,17 +91,17 @@ class HFRM(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.conv_head = Depth_conv(in_channels, out_channels)
+        self.conv_head = DepthConv(in_channels, out_channels)
 
         self.dilated_block_LH = Dilated_Resblock(out_channels, out_channels)
         self.dilated_block_HL = Dilated_Resblock(out_channels, out_channels)
 
-        self.cross_attention0 = cross_attention(out_channels, num_heads=8)
+        self.cross_attention0 = CrossAttention(out_channels, num_heads=8)
         self.dilated_block_HH = Dilated_Resblock(out_channels, out_channels)
         self.conv_HH = nn.Conv2d(out_channels * 2, out_channels, kernel_size=3, stride=1, padding=1)
-        self.cross_attention1 = cross_attention(out_channels, num_heads=8)
+        self.cross_attention1 = CrossAttention(out_channels, num_heads=8)
 
-        self.conv_tail = Depth_conv(out_channels, in_channels)
+        self.conv_tail = DepthConv(out_channels, in_channels)
 
     def forward(self, x):
         b, c, h, w = x.shape

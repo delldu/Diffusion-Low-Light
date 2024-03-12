@@ -19,6 +19,72 @@ def inverse_data_transform(X):
     return torch.clamp((X + 1.0) / 2.0, 0.0, 1.0)
 
 
+class LowLightEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dwt = DWT()
+        self.high_enhance0 = HFRM(in_channels=3, out_channels=64)
+        self.high_enhance1 = HFRM(in_channels=3, out_channels=64)
+
+        self.load_weights()
+
+    def forward(self, x):
+        B, C, H, W = x.size()
+        x = data_transform(x)
+        # tensor [x] size: [1, 3, 512, 512], min: -1.0, max: -0.090196, mean: -0.800914
+
+        x_dwt = self.dwt(x)
+        # tensor [x_dwt] size: [4, 3, 256, 256], min: -2.0, max: 0.498039, mean: -0.400283
+
+        x_l, x_h = x_dwt[:B, ...], x_dwt[B:, ...]
+        x_h = self.high_enhance0(x_h)
+
+        x_l_dwt = self.dwt(x_l)
+        x_l_l, x_l_h = x_l_dwt[:B, ...], x_l_dwt[B:, ...]
+        x_l_h = self.high_enhance1(x_l_h)
+        x_h_dwt = self.dwt(x_h)
+
+        # x_l_l.size() -- [1, 3, 128, 128]
+        # x_l_h.size() -- [3, 3, 128, 128]
+        # x_h.size() -- [3, 3, 256, 256]
+        # x_h_dwt.size() -- [12, 3, 128, 128]
+
+        # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        # image_lowlight_encoder.onnx(image) ==> list[19, 3, H4, W4]
+        # image_lowlight_denoise.onnx(LL_LL) ==> [1, 3, H4, W4]
+        # image_lowlight_decoder.onnx([1, 3, H4, H4], [3, 3, H4, W4], [3, 3, H2, H2]) ==> (image)
+
+        return torch.cat((x_l_l, x_l_h, x_h_dwt), dim = 0)
+
+
+    def load_weights(self, model_path="models/image_lowlight.pth"):
+        cdir = os.path.dirname(__file__)
+        checkpoint = model_path if cdir == "" else cdir + "/" + model_path
+        sd = torch.load(checkpoint)
+        # remove unet weights from sd
+        new_sd = {}
+        for k, v in sd.items():
+            if not k.startswith("Unet."):
+                new_sd[k] = v
+        self.load_state_dict(new_sd)
+
+
+class LowLightDecoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.idwt = IDWT()
+
+    def forward(self, x_l_l, x_l_h, x_h_dwt):
+        # x_l_l.size() -- [1, 3, 128, 128]
+        # x_l_h.size() -- [3, 3, 128, 128]
+        # x_h_dwt.size() [12, 3, 128, 128]
+        x_h = self.idwt(x_h_dwt)
+        x_l = self.idwt(torch.cat((x_l_l, x_l_h), dim=0))  # size() -- [1, 3, 256, 256]
+        x = self.idwt(torch.cat((x_l, x_h), dim=0))
+        x = inverse_data_transform(x)  # size() -- [1, 3, 512, 512]
+        return x
+
+
 class DiffLLNet(nn.Module):
     def __init__(self):
         super().__init__()
@@ -27,14 +93,12 @@ class DiffLLNet(nn.Module):
         self.MAX_TIMES = 32
         # GPU memory 2G, 430ms
 
-        self.high_enhance0 = HFRM(in_channels=3, out_channels=64)
-        self.high_enhance1 = HFRM(in_channels=3, out_channels=64)
+        self.encoder = LowLightEncoder()
         self.Unet = DiffusionUNet()
+        self.decoder = LowLightDecoder()
 
         self.num_timesteps = 200
         self.sampling_timesteps = 10
-
-        self.load_weights()
 
         # get_beta_schedule
         betas = np.linspace(0.0001, 0.02, self.num_timesteps, dtype=np.float64)
@@ -51,14 +115,37 @@ class DiffLLNet(nn.Module):
         self.reversed_seq = [i for i in range(0, self.num_timesteps, skip)][::-1] # reverse [0, 20, ..., 160, 180]
         self.reversed_next_seq = self.reversed_seq[1:] + [-1] # reverse [-1, 0, 20, ..., 140, 160]
 
-        self.dwt = DWT()
-        self.idwt = IDWT()
+    def resize_pad_tensor(self, x):
+        # Need Resize ?
+        B, C, H, W = x.size()
+        s = min(min(self.MAX_H / H, self.MAX_W / W), 1.0)
+        SH, SW = int(s * H), int(s * W)
+        resize_x = F.interpolate(x, size=(SH, SW), mode="bilinear", align_corners=False)
 
+        # Need Pad ?
+        r_pad = (self.MAX_TIMES - (SW % self.MAX_TIMES)) % self.MAX_TIMES
+        b_pad = (self.MAX_TIMES - (SH % self.MAX_TIMES)) % self.MAX_TIMES
+        resize_pad_x = F.pad(resize_x, (0, r_pad, 0, b_pad), mode="replicate")
+        return resize_pad_x
 
-    def load_weights(self, model_path="models/image_lowlight.pth"):
-        cdir = os.path.dirname(__file__)
-        checkpoint = model_path if cdir == "" else cdir + "/" + model_path
-        self.load_state_dict(torch.load(checkpoint))
+    def forward(self, x):
+        # tensor [x] size: [1, 3, 416, 608], min: 0.0, max: 0.2, mean: 0.057457
+        B2, C2, H2, W2 = x.size()
+        x = self.resize_pad_tensor(x)
+
+        x = self.encoder(x) # size() -- [16, 3, 104, 152]
+
+        x_l_l = x[0:1, :, :, :] # size() -- [1, 3, 104, 152]
+        x_l_h = x[1:4, :, :, :] # size() -- [3, 3, 104, 152]
+        x_h_dwt = x[4:17, :, :]
+
+        #################################################################################
+        denoise_l_l = self.sample_training(x_l_l)  # size() -- [1, 3, 104, 152]
+        #################################################################################
+
+        pred_x = self.decoder(denoise_l_l, x_l_h, x_h_dwt)
+
+        return pred_x[:, :, 0:H2, 0:W2].clamp(0.0, 1.0)
 
     def compute_alpha(self, t):
         a = self.one_betas_cumprod2.index_select(0, t + 1).view(-1, 1, 1, 1)
@@ -67,15 +154,15 @@ class DiffLLNet(nn.Module):
     def sample_training(self, x_cond, eta: float=0.0):
         # tensor [x_cond] size: [1, 3, 104, 152], min: -4.0, max: -0.780392, mean: -3.203657
 
-        n, c, h, w = x_cond.shape
-        x = torch.randn(n, c, h, w, device=x_cond.device)
+        B, C, H, W = x_cond.shape
+        x = torch.randn(B, C, H, W, device=x_cond.device)
         xs = [x]
 
         # self.reversed_seq -- [180, 160, 140, 120, 100, 80, 60, 40, 20, 0]
         # self.reversed_next_seq -- [160, 140, 120, 100, 80, 60, 40, 20, 0, -1]
         for i, j in zip(self.reversed_seq, self.reversed_next_seq):
-            t = (torch.ones(n) * i).to(x.device)
-            next_t = (torch.ones(n) * j).to(x.device)
+            t = (torch.ones(B) * i).to(x.device)
+            next_t = (torch.ones(B) * j).to(x.device)
             at = self.compute_alpha(t.long())
             at_next = self.compute_alpha(next_t.long())
             xt = xs[-1].to(x.device)
@@ -105,52 +192,3 @@ class DiffLLNet(nn.Module):
         #     tensor [item] size: [1, 3, 104, 152], min: -3.591407, max: 4.834415, mean: -0.489853
         #     tensor [item] size: [1, 3, 104, 152], min: -3.591892, max: 4.836276, mean: -0.489913
         return xs[-1]
-
-    def resize_pad_tensor(self, x):
-        # Need Resize ?
-        B, C, H, W = x.size()
-        s = min(min(self.MAX_H / H, self.MAX_W / W), 1.0)
-        SH, SW = int(s * H), int(s * W)
-        resize_x = F.interpolate(x, size=(SH, SW), mode="bilinear", align_corners=False)
-
-        # Need Pad ?
-        r_pad = (self.MAX_TIMES - (SW % self.MAX_TIMES)) % self.MAX_TIMES
-        b_pad = (self.MAX_TIMES - (SH % self.MAX_TIMES)) % self.MAX_TIMES
-        resize_pad_x = F.pad(resize_x, (0, r_pad, 0, b_pad), mode="replicate")
-        return resize_pad_x
-
-    def forward(self, x):
-        # tensor [x] size: [1, 3, 416, 608], min: 0.0, max: 0.2, mean: 0.057457
-        B, C, H, W = x.size()
-        x = self.resize_pad_tensor(x)
-
-        # data_dict = {}
-        # dwt, idwt = DWT(), IWT()
-
-        input_img = x[:, :3, :, :]
-        n, c, h, w = input_img.shape
-        input_img_norm = data_transform(input_img)
-        input_dwt = self.dwt(input_img_norm)
-        # tensor [input_img_norm] size: [1, 3, 416, 608], min: -1.0, max: -0.090196, mean: -0.800914
-        # tensor [input_dwt] size: [4, 3, 208, 304], min: -2.0, max: 0.498039, mean: -0.400283
-
-        input_LL, input_high0 = input_dwt[:n, ...], input_dwt[n:, ...]
-        # input_high0.size() -- [3, 3, 208, 304]
-        input_high0 = self.high_enhance0(input_high0)
-
-        input_LL_dwt = self.dwt(input_LL)
-        input_LL_LL, input_high1 = input_LL_dwt[:n, ...], input_LL_dwt[n:, ...]
-        input_high1 = self.high_enhance1(input_high1)
-
-        # input_LL_LL.size() -- [1, 3, 104, 152]
-        #################################################################################
-        denoise_LL_LL = self.sample_training(input_LL_LL)  # size() -- [1, 3, 104, 152]
-        #################################################################################
-
-        # input_high1.size() -- [3, 3, 104, 152]
-        # input_high0.size() -- [3, 3, 208, 304]
-        pred_LL = self.idwt(torch.cat((denoise_LL_LL, input_high1), dim=0))  # size() -- [1, 3, 208, 304]
-        pred_x = self.idwt(torch.cat((pred_LL, input_high0), dim=0))
-        pred_x = inverse_data_transform(pred_x)  # size() -- [1, 3, 416, 608]
-
-        return pred_x[:, :, 0:H, 0:W].clamp(0.0, 1.0)
